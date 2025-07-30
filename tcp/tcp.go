@@ -110,7 +110,6 @@ func (t *TCP) MarshalWithChecksum(srcIP, dstIP [16]byte) []byte {
 
 	// Get buffer from pool
 	buf := tcpBufferPool.Get().([]byte)
-	buf = buf[:0] // Reset length but keep capacity
 
 	// Build the complete packet
 	buf = append(buf, pseudo...)
@@ -129,7 +128,7 @@ func (t *TCP) MarshalWithChecksum(srcIP, dstIP [16]byte) []byte {
 	result := append(header, t.Payload...)
 
 	// Return buffer to pool
-	tcpBufferPool.Put(&buf)
+	tcpBufferPool.Put(buf)
 
 	return result
 }
