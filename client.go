@@ -36,12 +36,12 @@ func main() {
 		}
 
 		// Read server response
-		response, err := bufio.NewReader(tcpServer).ReadString('\n')
+		buf := make([]byte, 1024)
+		_, err = tcpServer.Read(buf)
 		if err != nil {
 			log.Printf("Failed to read response: %v", err)
 			return
 		}
-		fmt.Printf("Server response: %s", response)
 
 		fmt.Print("Enter message to send (or 'exit' to quit): ")
 	}

@@ -3,7 +3,6 @@ package ip
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 )
 
@@ -86,8 +85,6 @@ func ParseIPAddress(addr string) ([16]byte, IPVersion, error) {
 	var ipArray [16]byte
 
 	ip := net.ParseIP(addr)
-
-	fmt.Println("parsed ip:", ip)
 
 	if ip == nil {
 		return ipArray, 0, errors.New("invalid IP address")

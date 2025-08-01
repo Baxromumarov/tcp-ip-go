@@ -39,14 +39,9 @@ func handleConn(conn *tcp.TCPConn) {
 		}
 
 		if n > 0 {
-			fmt.Printf("Received: %s\n", string(buf[:n]))
-
-			// Echo back the received data
-			_, err := conn.Write(buf[:n])
-			if err != nil {
-				log.Printf("Write error: %v", err)
-				return
-			}
+			received := string(buf[:n])
+			fmt.Printf("Received: %s\n", received)
+			// Response is now handled in the TCP layer
 		}
 	}
 }

@@ -16,10 +16,9 @@ import (
 	"github.com/baxromumarov/http-go/ip"
 )
 
-// Buffer pool for TCP packet marshaling to reduce allocations
 var tcpBufferPool = sync.Pool{
 	New: func() interface{} {
-		return make([]byte, 0, 1500) // Pre-allocate with reasonable capacity
+		return make([]byte, 0, 1500)
 	},
 }
 
@@ -117,15 +116,12 @@ func (t *TCP) MarshalWithChecksum(srcIP, dstIP [16]byte) []byte {
 	header := t.Marshal()
 	pseudo := buildTCPPseudoHeader(srcIP, dstIP, uint16(len(header)+len(t.Payload)))
 
-	// Get buffer from pool
 	buf := tcpBufferPool.Get().([]byte)
 
-	// Build the complete packet
 	buf = append(buf, pseudo...)
 	buf = append(buf, header...)
 	buf = append(buf, t.Payload...)
 
-	// Pad if odd length
 	if len(buf)%2 == 1 {
 		buf = append(buf, 0)
 	}
@@ -133,17 +129,15 @@ func (t *TCP) MarshalWithChecksum(srcIP, dstIP [16]byte) []byte {
 	t.Checksum = ip.ComputeChecksum(buf)
 	binary.BigEndian.PutUint16(header[16:18], t.Checksum)
 
-	// Return the final packet
 	result := append(header, t.Payload...)
 
-	// Return buffer to pool
 	tcpBufferPool.Put(buf)
 
 	return result
 }
 
 func buildTCPPseudoHeader(srcIP, dstIP [16]byte, tcpLength uint16) []byte {
-	// Check if this is IPv4 (first 12 bytes are 0, last 4 contain the address)
+	// if this is IPv4 (first 12 bytes are 0, last 4 contain the address)
 	if srcIP[0] == 0 && srcIP[1] == 0 && srcIP[2] == 0 && srcIP[3] == 0 &&
 		srcIP[4] == 0 && srcIP[5] == 0 && srcIP[6] == 0 && srcIP[7] == 0 &&
 		srcIP[8] == 0 && srcIP[9] == 0 && srcIP[10] == 0xff && srcIP[11] == 0xff {
@@ -237,13 +231,13 @@ func DialTCP(dstIP string, dstPort uint16) (*TCPConn, error) {
 		return nil, fmt.Errorf("unsupported IP version: %v", version)
 	}
 
-	// 2. Open raw socket using your helper
+	// 2. Open raw socket
 	fd, err := OpenRawSocket()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open raw socket: %v", err)
 	}
 
-	// 3. Set local IP and port (use loopback for localhost connections)
+	// 3. Set local IP and port
 	localIP := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1}
 	localPort := uint16(54321)
 
@@ -260,10 +254,8 @@ func DialTCP(dstIP string, dstPort uint16) (*TCPConn, error) {
 	// 5. Perform handshake
 	if err := conn.handshake(); err != nil {
 		defer func() { _ = conn.Close() }()
-
 		return nil, fmt.Errorf("handshake failed: %v", err)
 	}
-	fmt.Println("Handshake successful")
 
 	return conn, nil
 }
@@ -273,8 +265,8 @@ type TCPListener struct {
 	LocalIP   [16]byte
 	LocalPort uint16
 	mu        sync.Mutex
-	conns     map[string]*TCPConn // key: remoteIP:remotePort
-	acceptCh  chan *TCPConn       // channel for Accept()
+	conns     map[string]*TCPConn // remoteIP:remotePort
+	acceptCh  chan *TCPConn
 	closed    bool
 }
 
@@ -288,8 +280,6 @@ func ListenTCP(addr string, port uint16) (*TCPListener, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Set socket options if needed (IP_HDRINCL, etc)
 
 	listener := &TCPListener{
 		FD:        fd,
@@ -315,7 +305,6 @@ func (l *TCPListener) packetHandler() {
 
 		n, _, err := syscall.Recvfrom(l.FD, buf, 0)
 		if err != nil {
-			log.Printf("Error receiving packet: %v", err)
 			continue
 		}
 
@@ -361,7 +350,6 @@ func (l *TCPListener) packetHandler() {
 			l.mu.Unlock()
 			err := l.sendSynAck(conn)
 			if err != nil {
-				log.Printf("Failed to send SYN-ACK: %v", err)
 				l.mu.Lock()
 				delete(l.conns, key)
 				l.mu.Unlock()
@@ -385,13 +373,13 @@ func (l *TCPListener) packetHandler() {
 			continue
 		}
 
-		// ✅ Application data handling happens outside handshake block
+		// Application data handling happens outside handshake block
 		if exists && conn.State == StateEstablished {
 			if tcpHdr.Flags&TCPFlagPSH != 0 || len(tcpHdr.Payload) > 0 {
-				fmt.Printf("Received data from %v: %s\n", key, string(tcpHdr.Payload))
 
 				conn.Ack = tcpHdr.Seq + uint32(len(tcpHdr.Payload))
 
+				// Send ACK for the received data
 				ack := &TCP{
 					SrcPort:    conn.LocalPort,
 					DstPort:    conn.RemotePort,
@@ -415,9 +403,43 @@ func (l *TCPListener) packetHandler() {
 
 				ipBytes, err := ipPkt.Marshal()
 				if err == nil {
-					sa := &syscall.SockaddrInet4{Port: int(conn.RemotePort)}
+					sa := &syscall.SockaddrInet4{}
 					copy(sa.Addr[:], conn.RemoteIP[12:16])
 					syscall.Sendto(conn.RawSocketFD, ipBytes, 0, sa)
+				}
+
+				// Send response data back to client
+				response := fmt.Sprintf("Server received: %s\n", string(tcpHdr.Payload))
+				responseData := []byte(response)
+
+				responseTCP := &TCP{
+					SrcPort:    conn.LocalPort,
+					DstPort:    conn.RemotePort,
+					Seq:        conn.Seq,
+					Ack:        conn.Ack,
+					DataOff:    5,
+					Flags:      TCPFlagPSH | TCPFlagACK,
+					WindowSize: defaultWindowSize,
+					Payload:    responseData,
+				}
+
+				responseBytes := responseTCP.MarshalWithChecksum(conn.LocalIP, conn.RemoteIP)
+
+				responseIP := &ip.IP{
+					Version:    ip.IPv4,
+					SrcAddr:    conn.LocalIP,
+					DestAddr:   conn.RemoteIP,
+					Payload:    responseBytes,
+					NextHeader: 6,
+					HopLimit:   64,
+				}
+
+				responseIPBytes, err := responseIP.Marshal()
+				if err == nil {
+					responseSA := &syscall.SockaddrInet4{}
+					copy(responseSA.Addr[:], conn.RemoteIP[12:16])
+					syscall.Sendto(conn.RawSocketFD, responseIPBytes, 0, responseSA)
+					conn.Seq += uint32(len(responseData))
 				}
 			}
 		}
@@ -455,7 +477,6 @@ func (l *TCPListener) sendSynAck(conn *TCPConn) error {
 
 	sa := &syscall.SockaddrInet4{}
 	copy(sa.Addr[:], conn.RemoteIP[12:16])
-	sa.Port = int(conn.RemotePort)
 
 	return syscall.Sendto(l.FD, ipBytes, 0, sa)
 }
@@ -486,7 +507,7 @@ func connKey(ip [16]byte, port uint16) string {
 	return net.IP(ip[12:16]).String() + ":" + strconv.Itoa(int(port))
 }
 
-//6. TCP State Machine (optional for minimal implementation)
+//6. TCP State Machine 
 //Implement 3-way handshake:
 //SYN → SYN-ACK → ACK
 //Connection states:
@@ -495,7 +516,6 @@ func connKey(ip [16]byte, port uint16) string {
 //ESTABLISHED
 //Optional: FIN handling
 
-//Here's how it works:
 //
 //1. SYN: The initiating computer (or active client) sends a synchronize sequence number (SYN)
 //packet to the receiving computer (usually a server). The SYN packet value is set to an arbitrary
@@ -516,7 +536,6 @@ func (conn *TCPConn) handshake() error {
 	// 1. initialize
 	conn.State = StateSynSent
 	conn.Seq = rand.Uint32()
-	fmt.Println("Remote port", conn.RemotePort)
 	// 2. send SYN
 	syn := &TCP{
 		SrcPort:    conn.LocalPort,
@@ -542,11 +561,8 @@ func (conn *TCPConn) handshake() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal IP packet: %v", err)
 	}
-	fmt.Println("POERT:", conn.RemotePort)
-	sa := &syscall.SockaddrInet4{
-		Port: int(conn.RemotePort),
-	}
 
+	sa := &syscall.SockaddrInet4{}
 	copy(sa.Addr[:], conn.RemoteIP[12:16])
 
 	if err := syscall.Sendto(conn.RawSocketFD, ipBytes, 0, sa); err != nil {
@@ -561,58 +577,62 @@ func (conn *TCPConn) handshake() error {
 
 	buf := make([]byte, 1500)
 
-	n, from, err := syscall.Recvfrom(conn.RawSocketFD, buf, 0)
-	if err != nil {
-		return fmt.Errorf("recvfrom failed: %v", err)
-	}
+	// Keep reading until we get a valid response from the server
+	var tcp *TCP
+	var remoteIP [4]byte
 
-	fromAddr, ok := from.(*syscall.SockaddrInet4)
-	if !ok {
-		return fmt.Errorf("unexpected address type: %T", from)
-	}
-	fmt.Println("WhOLE DATAL: %v", fromAddr)
-	remoteIP := fromAddr.Addr
-	remotePort := conn.RemotePort
-	fmt.Println("Remote port--->", remotePort)
-	if !bytes.Equal(remoteIP[:], conn.RemoteIP[12:16]) {
-		return fmt.Errorf("remote IP mismatch")
-	}
-
-	parsedIP, err := ip.ParseIPPacket(buf[:n])
-	if err != nil {
-		return fmt.Errorf("parse IP packet failed: %v", err)
-	}
-	log.Printf("State changed to3=7: %v", conn.State)
-
-	tcp, err := ParseTCPHeader(parsedIP.Payload)
-	if err != nil {
-		return fmt.Errorf("parse TCP header failed: %v", err)
-	}
-	log.Printf("State changed to3=8: %v", conn.State)
-
-	// Handle the response from the server
-	if tcp.Flags.Has(TCPFlagSYN) {
-		// Server sent a SYN (either SYN-ACK or just SYN)
-		log.Printf("Received SYN from server, flags=%#x, ack=%d", tcp.Flags, tcp.Ack)
-
-		// Set our acknowledgment number
-		conn.Ack = tcp.Seq + 1
-
-		// If it's a SYN-ACK, validate the acknowledgment
-		if tcp.Flags.Has(TCPFlagACK) {
-			if tcp.Ack != conn.Seq+1 {
-				return fmt.Errorf("invalid SYN-ACK: flags=%#x ack=%d", tcp.Flags, tcp.Ack)
-			}
+	for {
+		n, from, err := syscall.Recvfrom(conn.RawSocketFD, buf, 0)
+		if err != nil {
+			return fmt.Errorf("recvfrom failed: %v", err)
 		}
-	} else {
-		return fmt.Errorf("unexpected response: flags=%#x", tcp.Flags)
-	}
-	log.Printf("State changed to3=9: %v", conn.State)
 
+		fromAddr, ok := from.(*syscall.SockaddrInet4)
+		if !ok {
+			continue // Skip non-IPv4 packets
+		}
+		remoteIP = fromAddr.Addr
+		if !bytes.Equal(remoteIP[:], conn.RemoteIP[12:16]) {
+			continue // Skip packets from wrong IP
+		}
+
+		parsedIP, err := ip.ParseIPPacket(buf[:n])
+		if err != nil {
+			continue // Skip malformed IP packets
+		}
+
+		tcp, err = ParseTCPHeader(parsedIP.Payload)
+		if err != nil {
+			continue // Skip malformed TCP packets
+		}
+
+		// Check if this is a response from the server (not our own outgoing packet)
+		if tcp.SrcPort != conn.RemotePort || tcp.DstPort != conn.LocalPort {
+			continue // Skip packets not from server
+		}
+
+		// Handle the response from the server
+		if tcp.Flags.Has(TCPFlagSYN) {
+			// Server sent a SYN (either SYN-ACK or just SYN)
+
+			// If it's a SYN-ACK, validate the acknowledgment
+			if tcp.Flags.Has(TCPFlagACK) {
+				if tcp.Ack != conn.Seq+1 {
+					return fmt.Errorf("invalid SYN-ACK: flags=%#x ack=%d", tcp.Flags, tcp.Ack)
+				}
+			}
+		} else {
+			continue // Skip non-SYN packets
+		}
+
+		// We found a valid SYN-ACK response, break out of the loop
+		break
+	}
+
+	// Set acknowledgment number to server's sequence number + 1
 	conn.Ack = tcp.Seq + 1
 	conn.Seq += 1 // our SYN used this seq
 	conn.State = StateEstablished
-	log.Printf("State changed to: %v", conn.State)
 
 	// 4. send ACK
 	ack := &TCP{
@@ -645,48 +665,53 @@ func (conn *TCPConn) handshake() error {
 		return fmt.Errorf("send ACK failed: %v", err)
 	}
 
-	log.Printf("Handshake complete with %v:%d", remoteIP, remotePort)
 	return nil
 }
 
 func (conn *TCPConn) Read(b []byte) (int, error) {
-	return syscall.Read(conn.RawSocketFD, b)
+	buf := make([]byte, 1500)
+
+	for {
+		n, _, err := syscall.Recvfrom(conn.RawSocketFD, buf, 0)
+		if err != nil {
+			if err == syscall.EINTR || err == syscall.EAGAIN {
+				continue
+			}
+
+			return 0, err
+		}
+
+		ipPacket, err := ip.ParseIPPacket(buf[:n])
+		if err != nil {
+			continue 
+		}
+
+		tcpHdr, err := ParseTCPHeader(ipPacket.Payload)
+		if err != nil {
+			continue 
+		}
+
+	
+		if tcpHdr.SrcPort == conn.RemotePort && tcpHdr.DstPort == conn.LocalPort {
+			if len(tcpHdr.Payload) > 0 {
+				conn.Ack = tcpHdr.Seq + uint32(len(tcpHdr.Payload))
+			}
+
+			copyLen := len(tcpHdr.Payload)
+			if copyLen > len(b) {
+				copyLen = len(b)
+			}
+			copy(b, tcpHdr.Payload[:copyLen])
+
+			return copyLen, nil
+		}
+	}
 }
 
 func (conn *TCPConn) Close() error {
 	return syscall.Close(conn.RawSocketFD)
 }
 
-// // 7. Raw Socket Integration
-// // Open raw socket (e.g. syscall.Socket)
-// // Set IP_HDRINCL for custom IP headers
-// // Read/Write raw bytes to socket
-// func (conn *TCPConn) StartReceiver(handler func(*ip.IP, *TCP)) {
-// 	go func() {
-// 		buf := make([]byte, 1500)
-// 		for {
-// 			n, _, err := syscall.Recvfrom(conn.RawSocketFD, buf, 0)
-// 			if err != nil {
-// 				continue // optionally log or exit on fatal error
-// 			}
-
-// 			packet := make([]byte, n)
-// 			copy(packet, buf[:n])
-
-// 			ip, err := ip.ParseIPPacket(packet)
-// 			if err != nil || ip.NextHeader != 6 { // 6 = TCP
-// 				continue
-// 			}
-
-// 			tcpHdr, err := ParseTCPHeader(ip.Payload)
-// 			if err != nil {
-// 				continue
-// 			}
-
-// 			handler(ip, tcpHdr)
-// 		}
-// 	}()
-// }
 
 func OpenRawSocket() (int, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_TCP)
@@ -700,7 +725,7 @@ func OpenRawSocket() (int, error) {
 		return -1, fmt.Errorf("failed to set IP_HDRINCL: %v", err)
 	}
 
-	tv := syscall.Timeval{Sec: 5, Usec: 0} // 5-second recv timeout
+	tv := syscall.Timeval{Sec: 5, Usec: 0}
 	if err := syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv); err != nil {
 		_ = syscall.Close(fd)
 		return -1, fmt.Errorf("failed to set socket receive timeout: %v", err)
@@ -710,21 +735,19 @@ func OpenRawSocket() (int, error) {
 }
 
 func (conn *TCPConn) Write(b []byte) (int, error) {
-	// 1. Create TCP segment with proper Seq, Ack, Flags, Window, Checksum including payload `b`
 	tcpSegment := &TCP{
 		SrcPort:    conn.LocalPort,
 		DstPort:    conn.RemotePort,
 		Seq:        conn.Seq,
 		Ack:        conn.Ack,
-		DataOff:    5,                       // header length
-		Flags:      TCPFlagPSH | TCPFlagACK, // for example
+		DataOff:    5,                      
+		Flags:      TCPFlagPSH | TCPFlagACK, 
 		WindowSize: 65535,
-		Payload:    b, // Include the actual payload data
+		Payload:    b, 
 	}
 
 	tcpBytes := tcpSegment.MarshalWithChecksum(conn.LocalIP, conn.RemoteIP)
 
-	// 2. Build IP header with tcpBytes as payload
 	ipPacket := &ip.IP{
 		Version:    ip.IPv4,
 		SrcAddr:    conn.LocalIP,
@@ -739,17 +762,14 @@ func (conn *TCPConn) Write(b []byte) (int, error) {
 		return 0, fmt.Errorf("failed to marshal IP packet: %v", err)
 	}
 
-	// 3. Prepare sockaddr
-	sa := &syscall.SockaddrInet4{Port: int(conn.RemotePort)}
+	sa := &syscall.SockaddrInet4{}
 	copy(sa.Addr[:], conn.RemoteIP[12:16])
 
-	// 4. Send the full packet
 	err = syscall.Sendto(conn.RawSocketFD, ipBytes, 0, sa)
 	if err != nil {
 		return 0, fmt.Errorf("sendto failed: %v", err)
 	}
 
-	// 5. Update sequence number
 	conn.Seq += uint32(len(b))
 
 	return len(b), nil

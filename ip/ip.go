@@ -45,7 +45,7 @@ func (ip *IP) Marshal() ([]byte, error) {
 }
 
 func (ip *IP) marshalIPv4() ([]byte, error) {
-	headerLen := 20
+	const headerLen = 20
 	totalLen := uint16(headerLen + len(ip.Payload))
 	buf := make([]byte, totalLen)
 
@@ -71,10 +71,13 @@ func (ip *IP) marshalIPv4() ([]byte, error) {
 	buf[9] = ip.NextHeader
 
 	// Header Checksum (initially 0)
+	binary.BigEndian.PutUint16(buf[10:12], 0)
+
+	// Source and Destination Addresses
 	copy(buf[12:16], ip.SrcAddr[12:16])
 	copy(buf[16:20], ip.DestAddr[12:16])
 
-	// Compute checksum
+	// Compute checksum (with checksum field set to 0)
 	checksum := ComputeChecksum(buf[:headerLen])
 	binary.BigEndian.PutUint16(buf[10:12], checksum)
 
