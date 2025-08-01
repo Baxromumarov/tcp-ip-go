@@ -1,3 +1,3 @@
-module github.com/baxromumarov/http-go
+module github.com/baxromumarov/tcp-ip-go
 
 go 1.24.5

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/baxromumarov/http-go/ip"
+	"github.com/baxromumarov/tcp-ip-go/ip"
 )
 
 func TestCalculateTCPChecksum_CustomPorts(t *testing.T) {

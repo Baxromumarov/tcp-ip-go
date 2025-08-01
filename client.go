@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/baxromumarov/http-go/tcp"
+	"github.com/baxromumarov/tcp-ip-go/tcp"
 )
 
 func main() {

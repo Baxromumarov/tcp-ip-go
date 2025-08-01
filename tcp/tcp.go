@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/baxromumarov/http-go/ip"
+	"github.com/baxromumarov/tcp-ip-go/ip"
 )
 
 var tcpBufferPool = sync.Pool{
@@ -507,7 +507,7 @@ func connKey(ip [16]byte, port uint16) string {
 	return net.IP(ip[12:16]).String() + ":" + strconv.Itoa(int(port))
 }
 
-//6. TCP State Machine 
+//6. TCP State Machine
 //Implement 3-way handshake:
 //SYN → SYN-ACK → ACK
 //Connection states:
@@ -683,15 +683,14 @@ func (conn *TCPConn) Read(b []byte) (int, error) {
 
 		ipPacket, err := ip.ParseIPPacket(buf[:n])
 		if err != nil {
-			continue 
+			continue
 		}
 
 		tcpHdr, err := ParseTCPHeader(ipPacket.Payload)
 		if err != nil {
-			continue 
+			continue
 		}
 
-	
 		if tcpHdr.SrcPort == conn.RemotePort && tcpHdr.DstPort == conn.LocalPort {
 			if len(tcpHdr.Payload) > 0 {
 				conn.Ack = tcpHdr.Seq + uint32(len(tcpHdr.Payload))
@@ -711,7 +710,6 @@ func (conn *TCPConn) Read(b []byte) (int, error) {
 func (conn *TCPConn) Close() error {
 	return syscall.Close(conn.RawSocketFD)
 }
-
 
 func OpenRawSocket() (int, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_TCP)
@@ -740,10 +738,10 @@ func (conn *TCPConn) Write(b []byte) (int, error) {
 		DstPort:    conn.RemotePort,
 		Seq:        conn.Seq,
 		Ack:        conn.Ack,
-		DataOff:    5,                      
-		Flags:      TCPFlagPSH | TCPFlagACK, 
+		DataOff:    5,
+		Flags:      TCPFlagPSH | TCPFlagACK,
 		WindowSize: 65535,
-		Payload:    b, 
+		Payload:    b,
 	}
 
 	tcpBytes := tcpSegment.MarshalWithChecksum(conn.LocalIP, conn.RemoteIP)
